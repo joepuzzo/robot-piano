@@ -174,6 +174,18 @@ def main():
                         log.info("A0 pose saved: " + str(A0_position))
 
                 log.info("Now, please move the robot to the C8 key and press 'r'.")
+
+                # Switch to primitive execution mode ( so we only allow freedrive on one axis)
+                robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
+
+                log.info("Executing primitive: FloatingCartesian")
+
+                # Send command to robot
+                #               x y z r r r 
+                floatingAxis = "1 0 0 0 0 0";
+                cartFloatingFrame = "work";
+                robot.executePrimitive(f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame})")
+
                 while C8_position is None:
                     if str(input()) == "r":
                         robot.getRobotStates(robot_states)
