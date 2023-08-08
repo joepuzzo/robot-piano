@@ -35,3 +35,15 @@ python src/home.py 192.168.2.100 192.168.2.105
 ```
 
 If configured corectly the robot should move to the home position.
+
+## Playing the Piano
+
+In order to play the piano you need to run the following command and then calibrate the robot.
+
+Note: This command takes two additional arguments --keys and --start, this lets the program know the size of the piano and the first key in the sequence.
+
+Note: The default values are --keys 88 and --start A0. If none are provided these will be used.
+
+```
+python src/piano.py 192.168.2.100 192.168.2.105 --keys 61 --start C2
+```
