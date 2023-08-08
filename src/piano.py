@@ -42,8 +42,7 @@ def compute_velocity(current_position, target_position):
     return min(required_velocity, MAX_VELOCITY)
 
 
-def convert_note_to_index(note):
-    # Convert MIDI note name to an index
+def generate_note_sequence(start_note, num_keys):
     note_sequence = [
         'A0', 'A#0', 'B0',
         'C1', 'C#1', 'D1', 'D#1', 'E1', 'F1', 'F#1', 'G1', 'G#1', 'A1',
@@ -55,13 +54,22 @@ def convert_note_to_index(note):
         'A#6', 'B6', 'C7', 'C#7', 'D7', 'D#7', 'E7', 'F7', 'F#7', 'G7', 'G#7', 'A7',
         'A#7', 'B7', 'C8'
     ]
-    return note_sequence.index(note)
+    start_idx = note_sequence.index(start_note)
+    return note_sequence[start_idx:start_idx + num_keys]
+
+
+NOTE_SEQUENCE = []
+
+
+def convert_note_to_index(note):
+    # Convert MIDI note name to an index
+    return NOTE_SEQUENCE.index(note)
 
 
 def calculate_position(index, start_position, end_position):
     # Calculate note's Cartesian position based on the index and calibration data
     # Linear interpolation for simplicity
-    factor = index / 87.0
+    factor = index / float(len(NOTE_SEQUENCE) - 1)
     position = [
         start_position[i] + factor * (end_position[i] - start_position[i])
         for i in range(3)
@@ -98,6 +106,9 @@ def main():
     argparser = argparse.ArgumentParser()
     argparser.add_argument('robot_ip', help='IP address of the robot server')
     argparser.add_argument('local_ip', help='IP address of this PC')
+    argparser.add_argument('--keys', type=int, default=88,
+                           help='Number of keys on the keyboard')
+    argparser.add_argument('--start', type=str, default='A0', help='Start key')
     args = argparser.parse_args()
 
     # Define alias
@@ -110,6 +121,11 @@ def main():
     global A0_position
     global C8_position
     global midi_notes
+
+    global NOTE_SEQUENCE
+    NOTE_SEQUENCE = generate_note_sequence(args.start, args.keys)
+
+    log.info(f"Valid Notes: {str(NOTE_SEQUENCE)}")
 
     try:
         # RDK Initialization
@@ -205,9 +221,37 @@ def main():
                 # All done, stop robot and put into IDLE mode
                 robot.stop()
 
+                # ======= Orient EndEffector =========
+
+                # Switch to primitive execution mode
+                robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
+
+                # reference frame is changed from WORLD::WORLD_ORIGIN to TRAJ::START,
+                # which represents the current TCP frame
+                log.info("Executing primitive: MoveL")
+
+                # Example to convert target quaternion [w,x,y,z] to Euler ZYX using scipy package's 'xyz'
+                # extrinsic rotation
+                # NOTE: scipy uses [x,y,z,w] order to represent quaternion
+                target_quat = [0.9185587, 0.1767767, 0.3061862, 0.1767767]
+                # ZYX = [30, 30, 30] degrees
+                eulerZYX_deg = quat2eulerZYX(target_quat, degree=True)
+
+                # Send command to robot. This motion will hold current TCP position and
+                # only do TCP rotation
+                robot.executePrimitive(
+                    "MoveL(target=0.0 0.0 0.0 25.0 0.0 0.0 TRAJ START, maxVel=0.1)")
+
+                # Wait for reached target
+                while (parse_pt_states(robot.getPrimitiveStates(), "reachedTarget") != "1"):
+                    time.sleep(1)
+
+                # All done, stop robot and put into IDLE mode
+                robot.stop()
+
                 # ========= Find First Key ===========
 
-                # Switch to primitive execution mode ( so we only allow freedrive on two axis)
+                # Switch to primitive execution mode
                 robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
 
                 log.info("New Calibration process started")
@@ -221,7 +265,7 @@ def main():
                 floatingAxis = "1 1 1 0 0 0"
                 cartFloatingFrame = "work"
                 robot.executePrimitive(
-                    f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame})")
+                    f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame}, resistanceLevel=50 10 10 10 10 10)")
 
                 while A0_position is None:
                     if str(input()) == "r":
@@ -268,6 +312,13 @@ def main():
                 robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
 
                 for note in midi_notes:
+                    # Ensure only valid notes are executed
+                    if note not in NOTE_SEQUENCE:
+                        log.warn(
+                            f"Note {note} is out of range and will be skipped.")
+                        continue
+
+                    # Get note and position
                     note_index = convert_note_to_index(note)
                     note_position = calculate_position(
                         note_index, A0_position, C8_position)
