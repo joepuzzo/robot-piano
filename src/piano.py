@@ -27,7 +27,7 @@ midi_notes = []
 
 
 MAX_VELOCITY = 1.0
-CONSTANT_TIME = 1.0  # This is an arbitrary value; adjust as needed.
+CONSTANT_TIME = 0.8  # This is an arbitrary value; adjust as needed.
 
 
 def compute_velocity(current_position, target_position):
@@ -97,6 +97,28 @@ def print_input(log):
     print(
         "[r] - record midi notes or start and end positions when in calibration mode")
     print("[e] - start execution")
+
+
+def moveBy(current_position, offset):
+    """
+    Move current position by the given offset and convert the last four quaternion values to Euler angles.
+    """
+    # Ensure the current_position has at least 4 elements (for quaternions)
+    if len(current_position) < 4:
+        raise ValueError(
+            "Current position must have at least 4 elements for quaternion conversion")
+
+    # Calculate the new position offset
+    new_position = [cur + off for cur,
+                    off in zip(current_position[:3], offset)]
+
+    # Convert the last four quaternion elements to Euler angles
+    euler_angles = quat2eulerZYX(current_position[-4:], degree=True)
+
+    # Concatenate the new position with the Euler angles
+    new_position += euler_angles
+
+    return new_position
 
 
 def main():
@@ -230,13 +252,6 @@ def main():
                 # which represents the current TCP frame
                 log.info("Executing primitive: MoveL")
 
-                # Example to convert target quaternion [w,x,y,z] to Euler ZYX using scipy package's 'xyz'
-                # extrinsic rotation
-                # NOTE: scipy uses [x,y,z,w] order to represent quaternion
-                target_quat = [0.9185587, 0.1767767, 0.3061862, 0.1767767]
-                # ZYX = [30, 30, 30] degrees
-                eulerZYX_deg = quat2eulerZYX(target_quat, degree=True)
-
                 # Send command to robot. This motion will hold current TCP position and
                 # only do TCP rotation
                 robot.executePrimitive(
@@ -352,6 +367,25 @@ def main():
                         + list2str(MAX_CONTACT_WRENCH) + ")"
                     )
 
+                    while (parse_pt_states(robot.getPrimitiveStates(), "reachedTarget") != "1"):
+                        time.sleep(1)
+
+                    # Now press key Down
+                    log.info("Press")
+                    robot.getRobotStates(robot_states)
+                    log.info(f"Current {list2str(robot_states.tcpPose)}")
+                    down = moveBy(robot_states.tcpPose, [0.0, 0.0, -0.02])
+                    robot.executePrimitive(
+                        f"MoveL(target={list2str(down)} WORLD WORLD_ORIGIN, maxVel=0.4)")
+                    while (parse_pt_states(robot.getPrimitiveStates(), "reachedTarget") != "1"):
+                        time.sleep(1)
+
+                    # Now rais key up
+                    log.info("Release")
+                    robot.getRobotStates(robot_states)
+                    up = moveBy(robot_states.tcpPose, [0.0, 0.0, 0.02])
+                    robot.executePrimitive(
+                        f"MoveL(target={list2str(up)} WORLD WORLD_ORIGIN, maxVel=0.4)")
                     while (parse_pt_states(robot.getPrimitiveStates(), "reachedTarget") != "1"):
                         time.sleep(1)
 
