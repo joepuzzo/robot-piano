@@ -12,7 +12,7 @@ from utility import parse_pt_states
 # Import Flexiv RDK Python library
 # fmt: off
 import sys
-sys.path.insert(0, "../lib_py")
+sys.path.insert(0, "lib")
 import flexivrdk
 # fmt: on
 
@@ -29,9 +29,11 @@ midi_notes = []
 MAX_VELOCITY = 1.0
 CONSTANT_TIME = 1.0  # This is an arbitrary value; adjust as needed.
 
+
 def compute_velocity(current_position, target_position):
     # Calculate Euclidean distance between current and target positions
-    distance = math.sqrt(sum([(a - b) ** 2 for a, b in zip(current_position, target_position)]))
+    distance = math.sqrt(
+        sum([(a - b) ** 2 for a, b in zip(current_position, target_position)]))
 
     # Calculate required velocity to maintain constant time
     required_velocity = distance / CONSTANT_TIME
@@ -80,6 +82,15 @@ def print_description():
     print()
 
 
+def print_input(log):
+    # Acceptable user inputs
+    log.info("Accepted key inputs:")
+    print("[c] - calibrate to piano")
+    print(
+        "[r] - record midi notes or start and end positions when in calibration mode")
+    print("[e] - start execution")
+
+
 def main():
     # Program Setup
     # ==============================================================================================
@@ -96,6 +107,9 @@ def main():
     # Print description
     log.info("Description:")
     print_description()
+    global A0_position
+    global C8_position
+    global midi_notes
 
     try:
         # RDK Initialization
@@ -131,47 +145,91 @@ def main():
 
         log.info("Robot is now operational")
 
-        # Teach By Demonstration
+        # Zero Sensors
         # ==========================================================================================
-        # Recorded robot poses
-        saved_poses = []
+        # Get and print the current TCP force/moment readings
+        robot_states = flexivrdk.RobotStates()
+        robot.getRobotStates(robot_states)
+        log.info(
+            "TCP force and moment reading in base frame BEFORE sensor zeroing: " +
+            list2str(robot_states.extWrenchInBase) + "[N][Nm]")
+
+        # Run the "ZeroFTSensor" primitive to automatically zero force and torque sensors
+        robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
+        robot.executePrimitive("ZeroFTSensor()")
+
+        # WARNING: during the process, the robot must not contact anything, otherwise the result
+        # will be inaccurate and affect following operations
+        log.warn(
+            "Zeroing force/torque sensors, make sure nothing is in contact with the robot")
+
+        # Wait for the primitive completion
+        while (robot.isBusy()):
+            time.sleep(1)
+        log.info("Sensor zeroing complete")
+
+        # Get and print the current TCP force/moment readings
+        robot.getRobotStates(robot_states)
+        log.info(
+            "TCP force and moment reading in base frame AFTER sensor zeroing: " +
+            list2str(robot_states.extWrenchInBase) + "[N][Nm]")
+
+        # Input Loop
+        # ==========================================================================================
 
         # Robot states data
         robot_states = flexivrdk.RobotStates()
 
-        # Acceptable user inputs
-        log.info("Accepted key inputs:")
-        print("[c] - calibrate to piano")
-        print(
-            "[r] - record midi notes or start and end positions when in calibration mode")
-        print("[e] - start execution")
-
         # User input polling
         input_buffer = ""
         while True:
+            print_input(log)
+
             input_buffer = str(input())
 
             if input_buffer == "c":
                 # Clear storage
-                saved_poses.clear()
+                A0_position = None
+                C8_position = None
 
                 # Put robot to plan execution mode
                 robot.setMode(mode.NRT_PLAN_EXECUTION)
 
-                # Robot run free drive
-                robot.executePlan("PLAN-FreeDriveAuto")
+                # ========= Home The Robot ============
+                robot.executePlan("PLAN-Home")
+
+                # Print plan info while the current plan is running
+                while robot.isBusy():
+                    time.sleep(1)
+
+                # All done, stop robot and put into IDLE mode
+                robot.stop()
+
+                # ========= Find First Key ===========
+
+                # Switch to primitive execution mode ( so we only allow freedrive on two axis)
+                robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
 
                 log.info("New Calibration process started")
-                log.warn(
-                    "Hold down the enabling button on the motion bar to activate free drive")
+                log.info("Executing primitive: FloatingCartesian")
 
                 log.info(
                     "Calibration Mode. Please move the robot to the A0 key and press 'r'.")
+
+                # Send command to robot
+                #               x y z r r r
+                floatingAxis = "1 1 1 0 0 0"
+                cartFloatingFrame = "work"
+                robot.executePrimitive(
+                    f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame})")
+
                 while A0_position is None:
                     if str(input()) == "r":
                         robot.getRobotStates(robot_states)
                         A0_position = robot_states.tcpPose
                         log.info("A0 pose saved: " + str(A0_position))
+
+                # ========= Find Second Key ===========
 
                 log.info("Now, please move the robot to the C8 key and press 'r'.")
 
@@ -181,10 +239,11 @@ def main():
                 log.info("Executing primitive: FloatingCartesian")
 
                 # Send command to robot
-                #               x y z r r r 
-                floatingAxis = "1 0 0 0 0 0";
-                cartFloatingFrame = "work";
-                robot.executePrimitive(f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame})")
+                #               x y z r r r
+                floatingAxis = "0 1 0 0 0 0"
+                cartFloatingFrame = "work"
+                robot.executePrimitive(
+                    f"FloatingCartesian(cartFloatingAxis={floatingAxis}, cartFloatingFrame={cartFloatingFrame})")
 
                 while C8_position is None:
                     if str(input()) == "r":
@@ -212,10 +271,18 @@ def main():
                     note_index = convert_note_to_index(note)
                     note_position = calculate_position(
                         note_index, A0_position, C8_position)
-                    
+
+                    # Get current robot states
+                    robot.getRobotStates(robot_states)
+
+                    log.info(
+                        f"note_position: {note_position}, current_positon: {robot_states.tcpPose[:3]}")
+
                     # Compute velocity
-                    # note_velocity = compute_velocity(robot_states.tcpPose[:3], note_position)
-                    note_velocity = "0.3";
+                    note_velocity = compute_velocity(
+                        robot_states.tcpPose[:3], note_position)
+                    log.info(f"note_velocity: {note_velocity}")
+                    # note_velocity = "0.3"
 
                     # Convert quaternion to Euler ZYX required by MoveCompliance primitive
                     target_quat = [A0_position[3],
@@ -229,8 +296,8 @@ def main():
                         + list2str(note_position)
                         + list2str(target_euler_deg)
                         + "WORLD WORLD_ORIGIN, maxVel="
-                        note_velocity
-                        +", enableMaxContactWrench=1, maxContactWrench="
+                        + str(note_velocity)
+                        + ", enableMaxContactWrench=1, maxContactWrench="
                         + list2str(MAX_CONTACT_WRENCH) + ")"
                     )
 

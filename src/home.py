@@ -18,7 +18,7 @@ def print_description():
     Print tutorial description.
 
     """
-    print("This will bring robot to home cup state!")
+    print("This will bring robot to home state!")
     print()
 
 
@@ -34,6 +34,7 @@ def main():
     # Define alias
     log = flexivrdk.Log()
     mode = flexivrdk.Mode
+    plan_info = flexivrdk.PlanInfo()
 
     # Print description
     log.info("Tutorial description:")
@@ -73,21 +74,25 @@ def main():
 
         log.info("Robot is now operational")
 
-        # Execute Primitives
+        # Execute Plan
         # ==========================================================================================
-        # Switch to primitive execution mode
-        robot.setMode(mode.NRT_PRIMITIVE_EXECUTION)
+        # Switch to plan execution mode
+        robot.setMode(mode.NRT_PLAN_EXECUTION)
 
-        # Move robot joints to target positions
-        # ------------------------------------------------------------------------------------------
-        # The required parameter <target> takes in 7 target joint positions. Unit: degrees
-        log.info("Executing primitive: MoveJ")
+        robot.executePlan("PLAN-Home")
 
-        # Send command to robot
-        robot.executePrimitive("MoveJ(target=61 -22 -17 129 -47 -16 -25)")
-
-        # Wait for reached target
-        while (parse_pt_states(robot.getPrimitiveStates(), "reachedTarget") != "1"):
+        # Print plan info while the current plan is running
+        while robot.isBusy():
+            robot.getPlanInfo(plan_info)
+            log.info(" ")
+            print("assignedPlanName: ", plan_info.assignedPlanName)
+            print("ptName: ", plan_info.ptName)
+            print("nodeName: ", plan_info.nodeName)
+            print("nodePath: ", plan_info.nodePath)
+            print("nodePathTimePeriod: ", plan_info.nodePathTimePeriod)
+            print("nodePathNumber: ", plan_info.nodePathNumber)
+            print("velocityScale: ", plan_info.velocityScale)
+            print("")
             time.sleep(1)
 
         # All done, stop robot and put into IDLE mode
